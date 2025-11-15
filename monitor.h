@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <pthread.h>
+#include <atomic>
 
 class EventData
 {
@@ -28,6 +29,7 @@ public:
 
     void Init();
     void Destroy();
+    void Shutdown();  // Для graceful exit: set flag + broadcast
 
     void ProviderAction();
     void ConsumerAction();
@@ -37,5 +39,5 @@ private:
     pthread_cond_t m_cond;
     EventData* m_data;
     bool m_ready;
-    int m_iterations;  
+    std::atomic<bool> m_exit_flag;
 };
