@@ -91,6 +91,12 @@ void register_signal_handler() {
     printf("SIGHUP handler registered.\n");
 }
 
+void *get_socket_address(struct sockaddr *sockaddr) {
+    if (sockaddr->sa_family == AF_INET) {
+        return &(((struct sockaddr_in *)sockaddr)->sin_addr);
+    }
+    return &(((struct sockaddr_in6 *)sockaddr)->sin6_addr);
+}
 
 int main() {
 
@@ -114,7 +120,92 @@ int main() {
     }
 
     printf("Server listening on port %s. Waiting for connections and signals...\n", PORT);
-    close(server_socket);
+    
+    fd_set read_fds;
+    FD_ZERO(&read_fds); 
+    FD_SET(server_socket, &read_fds); 
+    int max_fd = server_socket; 
+    while (!wasSigHup) {
+        fd_set temp_fds = read_fds; 
+        int pselect_result = pselect(max_fd + 1, &temp_fds, NULL, NULL, NULL, &origMask);
+        if (pselect_result == -1) {
+           if (errno != EINTR) {
+                perror("pselect error");
+                break; 
+            }
+             continue;
+        }
+        if (wasSigHup) {
+            printf("Signal received, shutting down server gracefully...\n");
+            break; 
+        }
+        if (FD_ISSET(server_socket, &temp_fds)) {
+            
+            struct sockaddr_storage client_addr;
+            socklen_t addr_size = sizeof(client_addr);
+            int new_socket = accept(server_socket, (struct sockaddr *)&client_addr, &addr_size);
+             if (new_socket == -1) {
+                perror("accept error");
+            } else {
+                 char client_ip[INET6_ADDRSTRLEN];
+                inet_ntop(client_addr.ss_family, get_socket_address((struct sockaddr *)&client_addr), client_ip, INET6_ADDRSTRLEN);
+                printf("New connection attempt from %s on socket %d\n", client_ip, new_socket);
 
+                if (active_clients >= 1) {
+                   
+                    printf("Server already has an active connection. Closing new socket %d\n", new_socket);
+                    close(new_socket);
+                } else {
+                    
+                    FD_SET(new_socket, &read_fds); 
+                    client_sockets[active_clients] = new_socket;
+                    active_clients++;
+                    if (new_socket > max_fd) max_fd = new_socket; 
+                    printf("Keeping socket %d as the active connection.\n", new_socket);
+                }
+            }
+            if (--pselect_result <= 0) {
+                continue;
+            }
+        }
+        for (int i = 0; i < active_clients && pselect_result > 0; i++) {
+            int client_socket = client_sockets[i];
+            if (FD_ISSET(client_socket, &temp_fds)) {
+                char buffer[1024];
+                int bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
+
+                if (bytes_received <= 0) {
+                     if (bytes_received == 0) {
+                        printf("Client on socket %d disconnected.\n", client_socket);
+                    } else {
+                        perror("recv error on client socket");
+                    }
+
+                    FD_CLR(client_socket, &read_fds);
+                    close(client_socket);
+
+                    for (int j = i; j < active_clients - 1; j++) {
+                        client_sockets[j] = client_sockets[j + 1];
+                    }
+                    active_clients--;
+                    i--;
+                    pselect_result--;
+
+                } else {
+                    // Данные успешно получены
+                    printf("Received from socket %d: %d bytes\n", client_socket, bytes_received);
+                }
+
+            }
+
+        }
+    }
+    for (int i = 0; i < active_clients; i++) {
+        printf("Closing active client socket %d\n", client_sockets[i]);
+        close(client_sockets[i]);
+    }
+
+    close(server_socket);
+    printf("Server shutdown complete.\n"); 
     return 0;
 }
