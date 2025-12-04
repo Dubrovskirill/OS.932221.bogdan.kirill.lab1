@@ -125,7 +125,7 @@ int main() {
     FD_ZERO(&read_fds); 
     FD_SET(server_socket, &read_fds); 
     int max_fd = server_socket; 
-    while (!wasSigHup) {
+    while (1) {
         fd_set temp_fds = read_fds; 
         int pselect_result = pselect(max_fd + 1, &temp_fds, NULL, NULL, NULL, &origMask);
         if (pselect_result == -1) {
@@ -133,12 +133,13 @@ int main() {
                 perror("pselect error");
                 break; 
             }
-             continue;
-        }
-        if (wasSigHup) {
+            if (wasSigHup) {
             printf("Signal received, shutting down server gracefully...\n");
             break; 
+            }  
+            continue;
         }
+       
         if (FD_ISSET(server_socket, &temp_fds)) {
             
             struct sockaddr_storage client_addr;
