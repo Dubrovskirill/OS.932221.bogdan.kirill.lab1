@@ -24,7 +24,57 @@ void sigHupHandler(int sig) {
     wasSigHup = 1;
 }
 
-int setup_server_socket();
+int setup_server_socket() {
+    struct addrinfo hints, *addr_info, *iter;
+    int server_socket;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    if (getaddrinfo(NULL, PORT, &hints, &addr_info) != 0) {
+        perror("getaddrinfo failed");
+        return -1;
+    }
+
+    for (iter = addr_info; iter != NULL; iter = iter->ai_next) {
+        server_socket = socket(iter->ai_family, iter->ai_socktype, iter->ai_protocol);
+        if (server_socket < 0) {
+            continue;
+        }
+
+        int yes = 1;
+        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+            perror("setsockopt SO_REUSEADDR failed");
+            close(server_socket);
+            freeaddrinfo(addr_info);
+            return -1;
+        }
+
+        if (bind(server_socket, iter->ai_addr, iter->ai_addrlen) == 0) {
+            break;
+        }
+
+        close(server_socket);
+    }
+
+    freeaddrinfo(addr_info);
+
+    if (iter == NULL) {
+        fprintf(stderr, "Failed to bind server socket\n");
+        return -1;
+    }
+
+    if (listen(server_socket, MAX_CLIENTS) == -1) {
+        perror("listen failed");
+        close(server_socket);
+        return -1;
+    }
+
+    printf("Server socket created and listening on port %s\n", PORT);
+    return server_socket;
+}
 
 void register_signal_handler() {
     struct sigaction sa;
