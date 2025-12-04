@@ -164,11 +164,9 @@ int main() {
                     printf("Keeping socket %d as the active connection.\n", new_socket);
                 }
             }
-            if (--pselect_result <= 0) {
-                continue;
-            }
+            
         }
-        for (int i = 0; i < active_clients && pselect_result > 0; i++) {
+        for (int i = 0; i < active_clients; i++) {
             int client_socket = client_sockets[i];
             if (FD_ISSET(client_socket, &temp_fds)) {
                 char buffer[1024];
@@ -189,10 +187,8 @@ int main() {
                     }
                     active_clients--;
                     i--;
-                    pselect_result--;
 
                 } else {
-                    // Данные успешно получены
                     printf("Received from socket %d: %d bytes\n", client_socket, bytes_received);
                 }
 
