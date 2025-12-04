@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -24,7 +25,21 @@ void sigHupHandler(int sig) {
 }
 
 int setup_server_socket();
-void register_signal_handler();
+
+void register_signal_handler() {
+    struct sigaction sa;
+
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; 
+    sa.sa_handler = sigHupHandler;
+
+    if (sigaction(SIGHUP, &sa, NULL) == -1) {
+        perror("sigaction for SIGHUP failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("SIGHUP handler registered.\n");
+}
 
 
 int main() {
@@ -37,6 +52,7 @@ int main() {
     int active_clients = 0;
 
     register_signal_handler();
+
     sigset_t blockedMask, origMask;
     sigemptyset(&blockedMask);
     sigaddset(&blockedMask, SIGHUP);
