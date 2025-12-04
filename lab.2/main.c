@@ -106,19 +106,18 @@ int main() {
     }
     int client_sockets[MAX_CLIENTS];
     int active_clients = 0;
-
-    register_signal_handler();
-
     sigset_t blockedMask, origMask;
     sigemptyset(&blockedMask);
     sigaddset(&blockedMask, SIGHUP);
 
-     if (sigprocmask(SIG_BLOCK, &blockedMask, &origMask) == -1) {
+    if (sigprocmask(SIG_BLOCK, &blockedMask, &origMask) == -1) {
         perror("sigprocmask error");
         close(server_socket);
         return 1;
     }
 
+    register_signal_handler();
+    
     printf("Server listening on port %s. Waiting for connections and signals...\n", PORT);
     
     fd_set read_fds;
