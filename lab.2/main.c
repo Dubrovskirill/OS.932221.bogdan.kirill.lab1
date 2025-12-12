@@ -1,207 +1,148 @@
-#define _GNU_SOURCE
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include <unistd.h>
-#include <errno.h>
-#include <signal.h>
-#include <sys/socket.h>
-#include <stdlib.h>
-#include <stddef.h>
-#include <arpa/inet.h>
+#define _POSIX_C_SOURCE 200809L  
+
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <sys/select.h>
 
-#define PORT "31337"
-#define MAX_CLIENTS 256
+#define PORT 31337 
 
-volatile sig_atomic_t wasSigHup = 0;
+static volatile sig_atomic_t g_got_sighup = 0; 
+static int g_server_socket = -1; 
+static int g_client_socket = -1; 
 
 
-void sigHupHandler(int sig) {
-    (void)sig; // Подавляем предупреждение о неиспользуемом параметре
-    wasSigHup = 1;
+void handle_sighup(int signo) {
+    (void)signo;
+    g_got_sighup = 1; 
 }
 
-int setup_server_socket() {
-    struct addrinfo hints, *addr_info, *iter;
-    int server_socket;
 
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;
-
-    if (getaddrinfo(NULL, PORT, &hints, &addr_info) != 0) {
-        perror("getaddrinfo failed");
-        return -1;
-    }
-
-    for (iter = addr_info; iter != NULL; iter = iter->ai_next) {
-        server_socket = socket(iter->ai_family, iter->ai_socktype, iter->ai_protocol);
-        if (server_socket < 0) {
-            continue;
-        }
-
-        int yes = 1;
-        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
-            perror("setsockopt SO_REUSEADDR failed");
-            close(server_socket);
-            freeaddrinfo(addr_info);
-            return -1;
-        }
-
-        if (bind(server_socket, iter->ai_addr, iter->ai_addrlen) == 0) {
-            break;
-        }
-
-        close(server_socket);
-    }
-
-    freeaddrinfo(addr_info);
-
-    if (iter == NULL) {
-        fprintf(stderr, "Failed to bind server socket\n");
-        return -1;
-    }
-
-    if (listen(server_socket, MAX_CLIENTS) == -1) {
-        perror("listen failed");
-        close(server_socket);
-        return -1;
-    }
-
-    printf("Server socket created and listening on port %s\n", PORT);
-    return server_socket;
+void finish(const char* msg) {
+    perror(msg);
+    exit(EXIT_FAILURE);
 }
 
-void register_signal_handler() {
-    struct sigaction sa;
+int main(void)
+{
+    struct sigaction sa; 
+    memset(&sa, 0, sizeof(sa)); 
+    sa.sa_handler = handle_sighup; 
+    sigemptyset(&sa.sa_mask); 
+    sa.sa_flags = 0;
 
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0; 
-    sa.sa_handler = sigHupHandler;
-
+  
     if (sigaction(SIGHUP, &sa, NULL) == -1) {
-        perror("sigaction for SIGHUP failed");
-        exit(EXIT_FAILURE);
+        finish("sigaction"); 
     }
 
-    printf("SIGHUP handler registered.\n");
-}
+    sigset_t blocked_signals, orig_mask; 
+    sigemptyset(&blocked_signals); 
+    sigaddset(&blocked_signals, SIGHUP); 
 
-void *get_socket_address(struct sockaddr *sockaddr) {
-    if (sockaddr->sa_family == AF_INET) {
-        return &(((struct sockaddr_in *)sockaddr)->sin_addr);
-    }
-    return &(((struct sockaddr_in6 *)sockaddr)->sin6_addr);
-}
-
-int main() {
-
-    int server_socket = setup_server_socket();
-     if (server_socket == -1) {
-        return 1;
-    }
-    int client_sockets[MAX_CLIENTS];
-    int active_clients = 0;
-    sigset_t blockedMask, origMask;
-    sigemptyset(&blockedMask);
-    sigaddset(&blockedMask, SIGHUP);
-
-    if (sigprocmask(SIG_BLOCK, &blockedMask, &origMask) == -1) {
-        perror("sigprocmask error");
-        close(server_socket);
-        return 1;
+    if (sigprocmask(SIG_BLOCK, &blocked_signals, &orig_mask) == -1) {
+        finish("sigprocmask");
     }
 
-    register_signal_handler();
-    
-    printf("Server listening on port %s. Waiting for connections and signals...\n", PORT);
-    
-    fd_set read_fds;
-    FD_ZERO(&read_fds); 
-    FD_SET(server_socket, &read_fds); 
-    int max_fd = server_socket; 
-    while (1) {
-        fd_set temp_fds = read_fds; 
-        int pselect_result = pselect(max_fd + 1, &temp_fds, NULL, NULL, NULL, &origMask);
-        if (pselect_result == -1) {
-           if (errno != EINTR) {
-                perror("pselect error");
-                break; 
+    // Создаем серверный сокет
+    g_server_socket = socket(AF_INET, SOCK_STREAM, 0); 
+    if (g_server_socket == -1) {
+        finish("socket");
+    }
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr)); 
+    addr.sin_family = AF_INET; 
+    addr.sin_port = htons(PORT); 
+    addr.sin_addr.s_addr = htonl(INADDR_ANY); 
+
+    if (bind(g_server_socket, (struct sockaddr*)&addr, sizeof(addr)) == -1) { 
+        finish("bind");
+    }
+    if (listen(g_server_socket, 1) == -1) {
+        finish("listen");
+    }
+
+    printf("Server started on port %d (PID %d)\n", PORT, (int)getpid());
+    printf("One client is kept active, the remaining connections are closed immediately.\n");
+
+    while(1) {
+        fd_set read_fds; 
+     
+        FD_ZERO(&read_fds); 
+        FD_SET(g_server_socket, &read_fds); 
+        int maxfd = g_server_socket;
+
+        if (g_client_socket != -1) {
+            FD_SET(g_client_socket, &read_fds);
+            if (g_client_socket > maxfd) {
+                maxfd = g_client_socket;
             }
-            if (wasSigHup) {
-            printf("Signal received, shutting down server gracefully...\n");
-            break; 
-            }  
-            continue;
         }
+
        
-        if (FD_ISSET(server_socket, &temp_fds)) {
-            
-            struct sockaddr_storage client_addr;
-            socklen_t addr_size = sizeof(client_addr);
-            int new_socket = accept(server_socket, (struct sockaddr *)&client_addr, &addr_size);
-             if (new_socket == -1) {
-                perror("accept error");
-            } else {
-                 char client_ip[INET6_ADDRSTRLEN];
-                inet_ntop(client_addr.ss_family, get_socket_address((struct sockaddr *)&client_addr), client_ip, INET6_ADDRSTRLEN);
-                printf("New connection attempt from %s on socket %d\n", client_ip, new_socket);
+        int ready = pselect(maxfd + 1, &read_fds, NULL, NULL,
+            NULL, &orig_mask);
 
-                if (active_clients >= 1) {
-                   
-                    printf("Server already has an active connection. Closing new socket %d\n", new_socket);
-                    close(new_socket);
-                } else {
-                    
-                    FD_SET(new_socket, &read_fds); 
-                    client_sockets[active_clients] = new_socket;
-                    active_clients++;
-                    if (new_socket > max_fd) max_fd = new_socket; 
-                    printf("Keeping socket %d as the active connection.\n", new_socket);
+        if (ready == -1) { 
+            if (errno == EINTR) {
+               
+                if (g_got_sighup) {
+                    printf("Received signal SIGHUP (in main loop)\n");
+                    g_got_sighup = 0;
+                }
+                continue;
+            }
+            else { 
+                finish("pselect");
+            }
+        }
+
+       
+        if (FD_ISSET(g_server_socket, &read_fds)) { 
+            int new_fd = accept(g_server_socket, NULL, NULL); 
+            if (new_fd == -1) { 
+                perror("accept");
+            }
+            else {
+                printf("New connection accepted\n");
+                if (g_client_socket == -1) { 
+                    g_client_socket = new_fd; 
+                    printf("This connection has become an active client\n");
+                }
+                else { 
+                    printf("There is already an active client, close the extra connection\n");
+                    close(new_fd); 
                 }
             }
-            
         }
-        for (int i = 0; i < active_clients; i++) {
-            int client_socket = client_sockets[i];
-            if (FD_ISSET(client_socket, &temp_fds)) {
-                char buffer[1024];
-                int bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
-
-                if (bytes_received <= 0) {
-                     if (bytes_received == 0) {
-                        printf("Client on socket %d disconnected.\n", client_socket);
-                    } else {
-                        perror("recv error on client socket");
-                    }
-
-                    FD_CLR(client_socket, &read_fds);
-                    close(client_socket);
-
-                    for (int j = i; j < active_clients - 1; j++) {
-                        client_sockets[j] = client_sockets[j + 1];
-                    }
-                    active_clients--;
-                    i--;
-
-                } else {
-                    printf("Received from socket %d: %d bytes\n", client_socket, bytes_received);
-                }
-
+  
+        if (g_client_socket != -1 && FD_ISSET(g_client_socket, &read_fds)) {
+            char buf[4096];
+            ssize_t n = recv(g_client_socket, buf, sizeof(buf), 0);
+            if (n > 0) {
+                printf("Received %zd bytes\n", n);
             }
-
+            else if (n == 0) {
+                printf("The client closed the connection\n");
+                close(g_client_socket);
+                g_client_socket = -1;
+            }
+            else {
+                if (errno == EINTR) {
+                    continue;
+                }
+                perror("recv");
+                close(g_client_socket);
+                g_client_socket = -1;
+            }
         }
     }
-    for (int i = 0; i < active_clients; i++) {
-        printf("Closing active client socket %d\n", client_sockets[i]);
-        close(client_sockets[i]);
-    }
-
-    close(server_socket);
-    printf("Server shutdown complete.\n"); 
     return 0;
 }
