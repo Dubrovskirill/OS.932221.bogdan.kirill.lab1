@@ -59,7 +59,6 @@ static int __init tsu_init(void)
    
     pr_info("Welcome to the Tomsk State University\n"); 
 
-    // Требование Части 2: Создание файла /proc/tsulab
     proc_file = proc_create(PROCFS_NAME, 0644, NULL, &proc_file_ops); 
     if (!proc_file) {
         pr_err("Failed to create /proc/%s\n", PROCFS_NAME);
